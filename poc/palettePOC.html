@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>POC Palette</title>
+  <link rel="stylesheet" href="palettePOC.css">
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2em; }
+    #palette-canvas { border: 1px solid #333; background: #f8f8f8; }
+    .controls { margin-top: 1em; }
+    .object-list { margin-top: 1em; }
+  </style>
+</head>
+<body>
+  <h1>POC Palette 80x120x180cm</h1>
+  <div id="palette-3d" style="width:600px; height:400px; border:1px solid #333; background:#f8f8f8;"></div>
+  <div class="controls">
+    <label>Largeur (cm): <input type="number" id="obj-width" value="40" min="1" max="80"></label>
+    <label>Profondeur (cm): <input type="number" id="obj-depth" value="40" min="1" max="120"></label>
+    <label>Hauteur (cm): <input type="number" id="obj-height" value="40" min="1" max="180"></label>
+    <button id="add-object">Ajouter objet</button>
+  </div>
+  <div class="object-list">
+    <h3>Objets sur la palette</h3>
+    <ul id="objects"></ul>
+  </div>
+  <script src="../threeJsLib/three.js.r122.js"></script>
+  <script src="../threeJsLib/orbitControls.js"></script>
+  <script src="palettePOC.js"></script>
+</body>
+</html>
