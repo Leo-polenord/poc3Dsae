@@ -24,8 +24,9 @@
     <h3>Objets sur la palette</h3>
     <ul id="objects"></ul>
   </div>
-  <script src="../threeJsLib/three.js.r122.js"></script>
-  <script src="../threeJsLib/orbitControls.js"></script>
+  <!-- Use CDN copies to avoid cross-root 404 when serving `poc` as Vite root -->
+  <script src="https://unpkg.com/three@0.122.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.122.0/examples/js/controls/OrbitControls.js"></script>
   <script src="palettePOC.js"></script>
 </body>
 </html>

@@ -9,12 +9,19 @@ const toMeters = v => v / 100;
 
 // Vérifie que THREE est bien chargé
 if (typeof THREE === 'undefined') {
-  alert('Erreur critique : THREE.js n\'est pas chargé ! Vérifiez le chemin et le chargement du script three.js.r122.js dans le HTML.');
-  throw new Error('THREE.js n\'est pas chargé');
+  alert("Erreur critique : THREE.js n'est pas chargé ! Vérifiez le script dans le HTML.");
+  throw new Error("THREE.js n'est pas chargé");
 }
-if (typeof OrbitControls === 'undefined') {
-  alert('Erreur critique : OrbitControls n\'est pas chargé ! Vérifiez le chemin et le chargement du script orbitControls.js dans le HTML.');
-  throw new Error('OrbitControls n\'est pas chargé');
+
+// Supporte plusieurs façons dont OrbitControls peut être exposé :
+// - `THREE.OrbitControls` (exemples officiels)
+// - `OrbitControls` (version globale)
+const ControlsClass = (typeof THREE !== 'undefined' && typeof THREE.OrbitControls !== 'undefined')
+  ? THREE.OrbitControls
+  : (typeof OrbitControls !== 'undefined' ? OrbitControls : null);
+if (!ControlsClass) {
+  alert("Erreur critique : OrbitControls n'est pas chargé ! Vérifiez le script dans le HTML.");
+  throw new Error("OrbitControls n'est pas chargé");
 }
 
 const scene = new THREE.Scene();
@@ -28,7 +35,7 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(600, 400);
 document.getElementById('palette-3d').appendChild(renderer.domElement);
 
-const controls = new OrbitControls(camera, renderer.domElement);
+const controls = new ControlsClass(camera, renderer.domElement);
 controls.target.set(0, toMeters(PALETTE_HEIGHT/2), 0);
 controls.update();
 
