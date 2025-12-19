@@ -15,10 +15,23 @@
   <h1>POC Palette 80x120x180cm</h1>
   <div id="palette-3d" style="width:600px; height:400px; border:1px solid #333; background:#f8f8f8;"></div>
   <div class="controls">
-    <label>Largeur (cm): <input type="number" id="obj-width" value="40" min="1" max="80"></label>
-    <label>Profondeur (cm): <input type="number" id="obj-depth" value="40" min="1" max="120"></label>
-    <label>Hauteur (cm): <input type="number" id="obj-height" value="40" min="1" max="180"></label>
-    <button id="add-object">Ajouter objet</button>
+    <!--<label>Largeur (cm): <input type="number" id="obj-width" value="40" min="1" max="80"></label> -->
+    <!--<label>Profondeur (cm): <input type="number" id="obj-depth" value="40" min="1" max="120"></label> -->
+    <!--<label>Hauteur (cm): <input type="number" id="obj-height" value="40" min="1" max="180"></label> -->
+    <button id="add-object"></button>
+  </div>
+  <div class="controls" style="margin-top:0.5em;">
+    <button id="load-test">Charger test.json</button>
+    <button id="load-test-varied">Charger test-varied.json</button>
+    <button id="diag">Diagnostics</button>
+    <button id="clear-all" style="margin-left:0.5em;">Tout effacer</button>
+    <div style="margin-top:0.5em;">
+      <label style="display:block; margin-bottom:0.25em;">Liste d'objets (JSON array) :</label>
+      <textarea id="obj-list" style="width:600px; height:120px;" placeholder='[{"width":40,"depth":40,"height":40}, {"width":30,"depth":50,"height":60}]'></textarea><br>
+      <button id="load-queue">Charger la liste</button>
+      <button id="step-next">Suivant</button>
+      <span id="queue-count" style="margin-left:1em;">(0)</span>
+    </div>
   </div>
   <div class="object-list">
     <h3>Objets sur la palette</h3>
@@ -27,6 +40,6 @@
   <!-- Use CDN copies to avoid cross-root 404 when serving `poc` as Vite root -->
   <script src="https://unpkg.com/three@0.122.0/build/three.min.js"></script>
   <script src="https://unpkg.com/three@0.122.0/examples/js/controls/OrbitControls.js"></script>
-  <script src="palettePOC.js"></script>
+  <script src="palettePOC.clean.js"></script>
 </body>
 </html>

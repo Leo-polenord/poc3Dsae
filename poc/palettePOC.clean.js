@@ -1,8 +1,6 @@
-// Clean, minimal `palettePOC.js`
-// - Provides basic Three.js scene and a deterministic layer-based packing algorithm.
-// - Input units from UI: centimeters (cm). Internal units for Three.js: meters.
-
+// Clean, minimal `palettePOC.js` - single coherent implementation
 'use strict';
+// Palette packing (clean, minimal). Units: UI in cm, internal in meters.
 const PALETTE_WIDTH = 80; // cm
 const PALETTE_DEPTH = 120; // cm
 const PALETTE_HEIGHT = 180; // cm
@@ -10,7 +8,7 @@ const toMeters = v => v / 100;
 
 if (typeof THREE === 'undefined') throw new Error('THREE is required');
 
-// Scene + renderer
+// Scene + renderer (minimal setup)
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xf0f0f0);
 const camera = new THREE.PerspectiveCamera(45, 600 / 400, 0.1, 1000);
@@ -31,7 +29,7 @@ paletteMesh.position.set(0, toMeters(2.5), 0);
 scene.add(paletteMesh);
 
 // State
-const objects = []; // placed meshes
+const objects = [];
 const layers = [];
 const paletteHalfW = toMeters(PALETTE_WIDTH) / 2;
 const paletteHalfD = toMeters(PALETTE_DEPTH) / 2;
@@ -43,6 +41,7 @@ function createNewLayer(baseY, initialHeight) {
 }
 if (layers.length === 0) layers.push(createNewLayer(paletteTop, 0));
 
+// Core placement: layer-based skyline + guillotine split (right/bottom)
 function findPlacementInLayers(layersParam, w, d, h) {
   for (let li = 0; li < layersParam.length; li++) {
     const layer = layersParam[li];
@@ -64,6 +63,7 @@ function findPlacementInLayers(layersParam, w, d, h) {
       }
     }
   }
+  // no space in existing layers -> try create new layer
   const currentTop = layersParam.reduce((acc, L) => Math.max(acc, L.baseY + L.height), paletteTop);
   if (currentTop + h > paletteMaxTop + 1e-9) return null;
   const newLayer = createNewLayer(currentTop, h);
@@ -117,62 +117,6 @@ function addObject(widthCm, depthCm, heightCm) {
   mesh.userData = { width: w, depth: d, height: h };
   scene.add(mesh); objects.push(mesh); updateObjectList(); return mesh;
 }
-
-function addObjects(list) {
-  if (!Array.isArray(list)) return { placed: 0, failed: list ? list.length : 0 };
-  const items = [];
-  for (let i = 0; i < list.length; i++) {
-    const it = list[i];
-    const W = parseInt(it.width, 10), D = parseInt(it.depth, 10), H = parseInt(it.height, 10);
-    if (Number.isNaN(W) || Number.isNaN(D) || Number.isNaN(H)) continue;
-    if (W > PALETTE_WIDTH || D > PALETTE_DEPTH || H > PALETTE_HEIGHT) continue;
-    items.push({ origIndex: i, W, D, H, area: W * D });
-  }
-  items.sort((a, b) => b.area - a.area);
-  const failures = [];
-  for (const it of items) {
-    let pos = findPlacement(toMeters(it.W), toMeters(it.D), toMeters(it.H)); let rotated = false;
-    if (!pos) { pos = findPlacement(toMeters(it.D), toMeters(it.W), toMeters(it.H)); if (pos) rotated = true; }
-    if (!pos) { failures.push(it.origIndex); continue; }
-    const w = rotated ? it.D : it.W, d = rotated ? it.W : it.D, h = it.H;
-    // create mesh using cm->meters conversion
-    addObject(w, d, h);
-  }
-  return { placed: objects.length, failed: failures };
-}
-
-function removeObject(index) {
-  if (index < 0 || index >= objects.length) return;
-  const remaining = [];
-  for (let i = 0; i < objects.length; i++) {
-    if (i === index) { disposeMesh(objects[i]); scene.remove(objects[i]); continue; }
-    remaining.push({ width: Math.round(objects[i].userData.width * 100), depth: Math.round(objects[i].userData.depth * 100), height: Math.round(objects[i].userData.height * 100) });
-    disposeMesh(objects[i]); scene.remove(objects[i]);
-  }
-  objects.length = 0; layers.length = 0; layers.push(createNewLayer(paletteTop, 0));
-  if (remaining.length) addObjects(remaining); else updateObjectList();
-}
-
-function clearAll() { while (objects.length) { const m = objects.pop(); disposeMesh(m); scene.remove(m); } layers.length = 0; layers.push(createNewLayer(paletteTop, 0)); updateObjectList(); }
-
-// Simple DOM bindings (if elements exist)
-document.getElementById('add-objects')?.addEventListener('click', () => { const txt = document.getElementById('obj-list')?.value || ''; if (!txt) { alert('Collez une liste JSON'); return; } let parsed; try { parsed = JSON.parse(txt); } catch (e) { alert('JSON invalide: ' + e.message); return; } addObjects(parsed); });
-document.getElementById('clear-all')?.addEventListener('click', () => clearAll());
-document.getElementById('load-test')?.addEventListener('click', async () => { try { const r = await fetch('test.json'); const data = await r.json(); addObjects(data); } catch (e) { alert('Impossible de charger test.json'); } });
-
-function animate() { requestAnimationFrame(animate); renderer.render(scene, camera); }
-animate();
-
-document.getElementById('add-object').onclick = () => {
-  const width = parseInt(document.getElementById('obj-width').value, 10);
-  const depth = parseInt(document.getElementById('obj-depth').value, 10);
-  const height = parseInt(document.getElementById('obj-height').value, 10);
-  if (width > PALETTE_WIDTH || depth > PALETTE_DEPTH || height > PALETTE_HEIGHT) {
-    alert('Dimensions trop grandes pour la palette !');
-    return;
-  }
-  addObject(width, depth, height);
-};
 
 // Ajoute une liste d'objets fournie sous forme d'un tableau d'objets {width, depth, height}
 function addObjects(list) {
@@ -286,27 +230,68 @@ function addObjects(list) {
   }
 }
 
-// Bouton pour ajouter la liste depuis le textarea (JSON)
-const addListBtn = document.getElementById('add-objects');
-if (addListBtn) {
-  addListBtn.onclick = () => {
-    const txt = document.getElementById('obj-list').value;
-    if (!txt) {
-      alert('Collez une liste JSON d\'objets dans le textarea.');
-      return;
-    }
-    let parsed;
-    try {
-      parsed = JSON.parse(txt);
-    } catch (e) {
-      alert('JSON invalide : ' + e.message);
-      return;
-    }
-    addObjects(parsed);
-  };
+// Diagnostic utilities: clone layers and simulate placement without creating meshes
+function cloneLayers(src) {
+  return src.map(L => ({ baseY: L.baseY, height: L.height, freeRects: L.freeRects.map(r => ({ minX: r.minX, minZ: r.minZ, w: r.w, d: r.d })) }));
 }
 
-// --- Step-through placement queue ---
+function simulatePlacement(list) {
+  if (!Array.isArray(list)) return [];
+  const items = [];
+  for (let i = 0; i < list.length; i++) {
+    const it = list[i];
+    const W = parseInt(it.width, 10), D = parseInt(it.depth, 10), H = parseInt(it.height, 10);
+    if (Number.isNaN(W) || Number.isNaN(D) || Number.isNaN(H)) { items.push({ index: i, placed: false, reason: 'invalid' }); continue; }
+    if (W > PALETTE_WIDTH || D > PALETTE_DEPTH || H > PALETTE_HEIGHT) { items.push({ index: i, placed: false, reason: 'too-big' }); continue; }
+    items.push({ index: i, W, D, H, area: W * D });
+  }
+  items.sort((a, b) => b.area - a.area);
+  const layersCopy = cloneLayers(layers);
+  const steps = [];
+  for (const it of items) {
+    let pos = findPlacementInLayers(layersCopy, toMeters(it.W), toMeters(it.D), toMeters(it.H)); let rotated = false;
+    if (!pos) { pos = findPlacementInLayers(layersCopy, toMeters(it.D), toMeters(it.W), toMeters(it.H)); if (pos) rotated = true; }
+    steps.push({ index: it.index, placed: !!pos, rotated, pos });
+  }
+  return steps;
+}
+
+function removeObject(index) {
+  if (index < 0 || index >= objects.length) return;
+  const remaining = [];
+  for (let i = 0; i < objects.length; i++) {
+    if (i === index) { disposeMesh(objects[i]); scene.remove(objects[i]); continue; }
+    remaining.push({ width: Math.round(objects[i].userData.width * 100), depth: Math.round(objects[i].userData.depth * 100), height: Math.round(objects[i].userData.height * 100) });
+    disposeMesh(objects[i]); scene.remove(objects[i]);
+  }
+  objects.length = 0; layers.length = 0; layers.push(createNewLayer(paletteTop, 0));
+  if (remaining.length) addObjects(remaining); else updateObjectList();
+}
+
+function clearAll() { while (objects.length) { const m = objects.pop(); disposeMesh(m); scene.remove(m); } layers.length = 0; layers.push(createNewLayer(paletteTop, 0)); updateObjectList(); }
+
+// Minimal DOM bindings
+document.getElementById('add-objects')?.addEventListener('click', () => {
+  const txt = document.getElementById('obj-list')?.value || '';
+  if (!txt) { alert('Collez une liste JSON'); return; }
+  let parsed; try { parsed = JSON.parse(txt); } catch (e) { alert('JSON invalide: ' + e.message); return; }
+  addObjects(parsed);
+});
+document.getElementById('clear-all')?.addEventListener('click', () => clearAll());
+document.getElementById('load-test')?.addEventListener('click', async () => { try { const r = await fetch('test.json'); const data = await r.json(); addObjects(data); } catch (e) { alert('Impossible de charger test.json'); } });
+document.getElementById('load-test-varied')?.addEventListener('click', async () => { try { const r = await fetch('test_varied.json'); const data = await r.json(); addObjects(data); } catch (e) { alert('Impossible de charger test-varied.json'); } });
+// Diagnostic button (if present in the UI)
+document.getElementById('diag')?.addEventListener('click', () => {
+  const txt = document.getElementById('obj-list')?.value || '';
+  if (!txt) { alert('Collez une liste JSON'); return; }
+  let parsed; try { parsed = JSON.parse(txt); } catch (e) { alert('JSON invalide: ' + e.message); return; }
+  const sim = simulatePlacement(parsed);
+  console.log('Diagnostic simulation:', sim);
+  const failed = sim.filter(s => !s.placed);
+  alert(`Diagnostic: ${sim.length - failed.length} placés, ${failed.length} échoués. Voir console pour détails.`);
+});
+
+// --- Placement queue: load list then step-through placement ---
 const placementQueue = [];
 function updateQueueCount() {
   const el = document.getElementById('queue-count');
@@ -327,18 +312,17 @@ function normalizeListToItems(list) {
   return items;
 }
 
-document.getElementById('load-queue')?.addEventListener('click', () => {
-  const txt = document.getElementById('obj-list').value;
+function loadQueueFromTextarea() {
+  const txt = document.getElementById('obj-list')?.value || '';
   if (!txt) { alert('Collez une liste JSON d\'objets dans le textarea.'); return; }
-  let parsed;
-  try { parsed = JSON.parse(txt); } catch (e) { alert('JSON invalide : ' + e.message); return; }
+  let parsed; try { parsed = JSON.parse(txt); } catch (e) { alert('JSON invalide: ' + e.message); return; }
   const items = normalizeListToItems(parsed);
   // keep the provided order in the queue (visualization), but we could sort if desired
   placementQueue.length = 0;
   for (let it of items) placementQueue.push(it);
   updateQueueCount();
   alert(`Liste chargée : ${placementQueue.length} objets`);
-});
+}
 
 function placeNextFromQueue() {
   if (placementQueue.length === 0) { alert('Queue vide'); return; }
@@ -372,67 +356,9 @@ function placeNextFromQueue() {
   updateQueueCount();
 }
 
-document.getElementById('step-next')?.addEventListener('click', () => placeNextFromQueue());
+document.getElementById('load-queue')?.addEventListener('click', loadQueueFromTextarea);
+document.getElementById('step-next')?.addEventListener('click', placeNextFromQueue);
+updateQueueCount();
 
-// Clear all placed objects and reset packing state
-const clearBtn = document.getElementById('clear-all');
-if (clearBtn) {
-  clearBtn.addEventListener('click', () => {
-    // remove all meshes in objects from scene
-    while (objects.length > 0) {
-      const m = objects.pop();
-      try { scene.remove(m); } catch (e) { /* ignore */ }
-    }
-    // reset layers to initial state
-    layers.length = 0;
-    layers.push(createNewLayer(paletteTop, 0));
-    // clear placement queue
-    placementQueue.length = 0;
-    updateQueueCount();
-    updateObjectList();
-    console.log('Palette cleared: objects removed, layers reset, queue cleared.');
-  });
-}
-
-// Bouton: charger automatiquement `test.json` et l'ajouter
-const loadTestBtn = document.getElementById('load-test');
-if (loadTestBtn) {
-  loadTestBtn.onclick = async () => {
-    try {
-      const resp = await fetch('test.json');
-      if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
-      const data = await resp.json();
-      if (!Array.isArray(data)) {
-        alert('Le fichier test.json doit contenir un tableau d\'objets.');
-        return;
-      }
-      addObjects(data);
-    } catch (err) {
-      alert('Impossible de charger test.json : ' + err.message);
-    }
-  };
-}
-
-const loadTestVariedBtn = document.getElementById('load-test-varied');
-if (loadTestVariedBtn) {
-  loadTestVariedBtn.onclick = async () => {
-    try {
-      const resp = await fetch('test_varied.json');
-      if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
-      const data = await resp.json();
-      if (!Array.isArray(data)) {
-        alert('Le fichier test.json doit contenir un tableau d\'objets.');
-        return;
-      }
-      addObjects(data);
-    } catch (err) {
-      alert('Impossible de charger test-varied.json : ' + err.message);
-    }
-  };
-}
-
-function animate() {
-  requestAnimationFrame(animate);
-  renderer.render(scene, camera);
-}
+function animate() { requestAnimationFrame(animate); renderer.render(scene, camera); }
 animate();
