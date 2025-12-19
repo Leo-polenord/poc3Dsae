@@ -37,6 +37,8 @@ const paletteHalfW = toMeters(PALETTE_WIDTH) / 2;
 const paletteHalfD = toMeters(PALETTE_DEPTH) / 2;
 const paletteTop = toMeters(5);
 const paletteMaxTop = toMeters(PALETTE_HEIGHT);
+// minimal fraction of footprint that must be supported by underlying top
+let SUPPORT_THRESHOLD = 0.75; // 75% (mutable from UI)
 
 function createNewLayer(baseY, initialHeight) {
   return { baseY, height: initialHeight, freeRects: [{ minX: -paletteHalfW, minZ: -paletteHalfD, w: paletteHalfW * 2, d: paletteHalfD * 2 }] };
@@ -44,26 +46,61 @@ function createNewLayer(baseY, initialHeight) {
 if (layers.length === 0) layers.push(createNewLayer(paletteTop, 0));
 
 function findPlacementInLayers(layersParam, w, d, h) {
+  // Try existing layers: for each freeRect, attempt multiple candidate
+  // placements (grid) inside the rect to maximize support fraction and
+  // ensure the center of gravity is supported.
   for (let li = 0; li < layersParam.length; li++) {
     const layer = layersParam[li];
     for (let ri = 0; ri < layer.freeRects.length; ri++) {
       const r = layer.freeRects[ri];
-      if (r.w + 1e-9 >= w && r.d + 1e-9 >= d) {
-        const x = r.minX + w / 2;
-        const z = r.minZ + d / 2;
-        const y = layer.baseY;
-        const rightW = r.w - w;
-        const bottomD = r.d - d;
-        const rightRect = rightW > 1e-9 ? { minX: r.minX + w, minZ: r.minZ, w: rightW, d: d } : null;
-        const bottomRect = bottomD > 1e-9 ? { minX: r.minX, minZ: r.minZ + d, w: r.w, d: bottomD } : null;
-        layer.freeRects.splice(ri, 1);
-        if (bottomRect) layer.freeRects.splice(ri, 0, bottomRect);
-        if (rightRect) layer.freeRects.splice(ri + (bottomRect ? 1 : 0), 0, rightRect);
-        layer.height = Math.max(layer.height, h);
-        return { x, y, z, layerIndex: li };
+      if (r.w + 1e-9 < w || r.d + 1e-9 < d) continue;
+
+      const rXmin = r.minX;
+      const rZmin = r.minZ;
+      const rXmax = r.minX + r.w;
+      const rZmax = r.minZ + r.d;
+
+      const stepX = Math.max(w / 4, 0.02);
+      const stepZ = Math.max(d / 4, 0.02);
+
+      for (let px = rXmin; px <= rXmax - w + 1e-9; px += stepX) {
+        for (let pz = rZmin; pz <= rZmax - d + 1e-9; pz += stepZ) {
+          const cx = px + w / 2;
+          const cz = pz + d / 2;
+          const supportInfo = findSupportYUnder(cx, cz, w, d);
+          // must be supported exactly at this layer base
+          if (Math.abs(supportInfo.supportY - layer.baseY) > 1e-9) continue;
+          if ((supportInfo.supportFraction || 0) + 1e-9 < SUPPORT_THRESHOLD) continue;
+          if (!centerInsideSupport(supportInfo.supportRects, cx, cz)) continue;
+
+          // Accept placement at (cx,cz). Remove r and add residual rects.
+          const pMinX = cx - w / 2;
+          const pMinZ = cz - d / 2;
+          const pMaxX = pMinX + w;
+          const pMaxZ = pMinZ + d;
+
+          const newRects = [];
+          // left strip
+          if (pMinX - rXmin > 1e-9) newRects.push({ minX: rXmin, minZ: rZmin, w: pMinX - rXmin, d: r.d });
+          // right strip
+          if (rXmax - pMaxX > 1e-9) newRects.push({ minX: pMaxX, minZ: rZmin, w: rXmax - pMaxX, d: r.d });
+          // top strip (between left/right within placement span)
+          const spanMinX = Math.max(rXmin, pMinX);
+          const spanMaxX = Math.min(rXmax, pMaxX);
+          if (pMinZ - rZmin > 1e-9 && spanMaxX - spanMinX > 1e-9) newRects.push({ minX: spanMinX, minZ: rZmin, w: spanMaxX - spanMinX, d: pMinZ - rZmin });
+          // bottom strip
+          if (rZmax - pMaxZ > 1e-9 && spanMaxX - spanMinX > 1e-9) newRects.push({ minX: spanMinX, minZ: pMaxZ, w: spanMaxX - spanMinX, d: rZmax - pMaxZ });
+
+          layer.freeRects.splice(ri, 1);
+          if (newRects.length) layer.freeRects.splice(ri, 0, ...newRects);
+          layer.height = Math.max(layer.height, h);
+          return { x: cx, y: layer.baseY, z: cz, layerIndex: li };
+        }
       }
     }
   }
+
+  // No supported positions found in existing layers -> create new layer at top
   const currentTop = layersParam.reduce((acc, L) => Math.max(acc, L.baseY + L.height), paletteTop);
   if (currentTop + h > paletteMaxTop + 1e-9) return null;
   const newLayer = createNewLayer(currentTop, h);
@@ -94,6 +131,80 @@ function disposeMesh(mesh) {
   } catch (e) {}
 }
 
+// Find highest support (top Y) under a footprint (x,z center with width w and depth d)
+function findSupportYUnder(x, z, w, d) {
+  const eps = 1e-9;
+  const halfW = w / 2;
+  const halfD = d / 2;
+  const fMinX = x - halfW;
+  const fMaxX = x + halfW;
+  const fMinZ = z - halfD;
+  const fMaxZ = z + halfD;
+  const footprintArea = Math.max(1e-12, w * d);
+
+  // Find highest top under footprint (including palette)
+  let highestTop = paletteTop;
+  for (let i = 0; i < objects.length; i++) {
+    const o = objects[i];
+    if (!o || !o.userData) continue;
+    const ow = o.userData.width || 0;
+    const od = o.userData.depth || 0;
+    const ox = o.position.x;
+    const oz = o.position.z;
+    const oMinX = ox - ow / 2;
+    const oMaxX = ox + ow / 2;
+    const oMinZ = oz - od / 2;
+    const oMaxZ = oz + od / 2;
+    // check any overlap
+    const overlapW = Math.max(0, Math.min(fMaxX, oMaxX) - Math.max(fMinX, oMinX));
+    const overlapD = Math.max(0, Math.min(fMaxZ, oMaxZ) - Math.max(fMinZ, oMinZ));
+    if (overlapW > eps && overlapD > eps) {
+      const top = o.position.y + (o.userData.height || 0) / 2;
+      if (top > highestTop) highestTop = top;
+    }
+  }
+
+  // If highestTop is paletteTop (no objects overlapping), full support
+  if (Math.abs(highestTop - paletteTop) < 1e-9) {
+    return { supportY: highestTop, supportFraction: 1, supportRects: [{ minX: fMinX, minZ: fMinZ, w: w, d: d }] };
+  }
+
+  // Sum overlap area of objects whose top equals highestTop (within eps)
+  let overlapArea = 0;
+  const supportRects = [];
+  for (let i = 0; i < objects.length; i++) {
+    const o = objects[i];
+    if (!o || !o.userData) continue;
+    const ow = o.userData.width || 0;
+    const od = o.userData.depth || 0;
+    const ox = o.position.x;
+    const oz = o.position.z;
+    const top = o.position.y + (o.userData.height || 0) / 2;
+    if (Math.abs(top - highestTop) > 1e-9) continue;
+    const oMinX = ox - ow / 2;
+    const oMaxX = ox + ow / 2;
+    const oMinZ = oz - od / 2;
+    const oMaxZ = oz + od / 2;
+    const overlapW = Math.max(0, Math.min(fMaxX, oMaxX) - Math.max(fMinX, oMinX));
+    const overlapD = Math.max(0, Math.min(fMaxZ, oMaxZ) - Math.max(fMinZ, oMinZ));
+    if (overlapW > eps && overlapD > eps) {
+      overlapArea += overlapW * overlapD;
+      supportRects.push({ minX: Math.max(fMinX, oMinX), minZ: Math.max(fMinZ, oMinZ), w: overlapW, d: overlapD });
+    }
+  }
+
+  const supportFraction = Math.min(1, overlapArea / footprintArea);
+  return { supportY: highestTop, supportFraction, supportRects };
+}
+
+function centerInsideSupport(supportRects, x, z) {
+  if (!Array.isArray(supportRects) || supportRects.length === 0) return false;
+  for (const r of supportRects) {
+    if (x >= r.minX - 1e-9 && x <= r.minX + r.w + 1e-9 && z >= r.minZ - 1e-9 && z <= r.minZ + r.d + 1e-9) return true;
+  }
+  return false;
+}
+
 function updateObjectList() {
   const ul = document.getElementById('objects');
   if (!ul) return;
@@ -113,7 +224,9 @@ function addObject(widthCm, depthCm, heightCm) {
   const geom = new THREE.BoxGeometry(w, h, d);
   const mat = new THREE.MeshPhongMaterial({ color: new THREE.Color(`hsl(${Math.random() * 360},70%,70%)`) });
   const mesh = new THREE.Mesh(geom, mat);
-  mesh.position.set(pos.x, pos.y + h / 2, pos.z);
+  // snap to highest support under the footprint so objects don't levitate
+  const { supportY } = findSupportYUnder(pos.x, pos.z, w, d);
+  mesh.position.set(pos.x, supportY + h / 2, pos.z);
   mesh.userData = { width: w, depth: d, height: h };
   scene.add(mesh); objects.push(mesh); updateObjectList(); return mesh;
 }
@@ -159,6 +272,20 @@ function clearAll() { while (objects.length) { const m = objects.pop(); disposeM
 document.getElementById('add-objects')?.addEventListener('click', () => { const txt = document.getElementById('obj-list')?.value || ''; if (!txt) { alert('Collez une liste JSON'); return; } let parsed; try { parsed = JSON.parse(txt); } catch (e) { alert('JSON invalide: ' + e.message); return; } addObjects(parsed); });
 document.getElementById('clear-all')?.addEventListener('click', () => clearAll());
 document.getElementById('load-test')?.addEventListener('click', async () => { try { const r = await fetch('test.json'); const data = await r.json(); addObjects(data); } catch (e) { alert('Impossible de charger test.json'); } });
+
+// Wire SUPPORT_THRESHOLD slider from UI (if present)
+const thrInput = document.getElementById('support-threshold');
+const thrValue = document.getElementById('support-value');
+if (thrInput) {
+  const v = parseInt(thrInput.value, 10) || 75;
+  SUPPORT_THRESHOLD = v / 100;
+  if (thrValue) thrValue.textContent = `${v}%`;
+  thrInput.addEventListener('input', (ev) => {
+    const nv = parseInt(ev.target.value, 10) || 75;
+    SUPPORT_THRESHOLD = nv / 100;
+    if (thrValue) thrValue.textContent = `${nv}%`;
+  });
+}
 
 function animate() { requestAnimationFrame(animate); renderer.render(scene, camera); }
 animate();
@@ -246,7 +373,9 @@ function addObjects(list) {
     const color = new THREE.Color(`hsl(${Math.random() * 360},70%,70%)`);
     const material = new THREE.MeshPhongMaterial({ color });
     const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.set(pos.x, pos.y + hh / 2, pos.z);
+    // ensure object rests on highest support under its footprint
+    const { supportY } = findSupportYUnder(pos.x, pos.z, ww, dd);
+    mesh.position.set(pos.x, supportY + hh / 2, pos.z);
     mesh.userData = { width: ww, depth: dd, height: hh };
     scene.add(mesh);
     objects.push(mesh);
@@ -364,7 +493,9 @@ function placeNextFromQueue() {
   const color = new THREE.Color(`hsl(${Math.random() * 360},70%,70%)`);
   const material = new THREE.MeshPhongMaterial({ color });
   const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.set(pos.x, pos.y + hh / 2, pos.z);
+  // ensure object rests on highest support under its footprint
+  const { supportY } = findSupportYUnder(pos.x, pos.z, ww, dd);
+  mesh.position.set(pos.x, supportY + hh / 2, pos.z);
   mesh.userData = { width: ww, depth: dd, height: hh };
   scene.add(mesh);
   objects.push(mesh);
@@ -430,6 +561,73 @@ if (loadTestVariedBtn) {
     }
   };
 }
+
+// Load placements produced by the headless solver (solver_result.json)
+async function loadSolverPlacements(gridCm = 5, solverPath = 'solver_result.json', inputPath = 'test.json') {
+  try {
+    const resp = await fetch(solverPath);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+    const result = await resp.json();
+    if (!result || !Array.isArray(result.placed)) throw new Error('solver_result.json format invalide');
+
+    const resp2 = await fetch(inputPath);
+    if (!resp2.ok) throw new Error(`HTTP ${resp2.status} ${resp2.statusText}`);
+    const data = await resp2.json();
+
+    // compute per-layer heights (cm) using original item heights
+    const layerMaxH = {};
+    for (const p of result.placed) {
+      const it = data[p.index];
+      if (!it) continue;
+      const h = Number(it.height) || 0;
+      layerMaxH[p.layer] = Math.max(layerMaxH[p.layer] || 0, h);
+    }
+    const maxLayer = Math.max(...Object.keys(layerMaxH).map(k => parseInt(k, 10)), 0);
+    const baseYcm = [];
+    baseYcm[0] = 5; // palette top thickness in cm
+    for (let L = 1; L <= maxLayer; L++) baseYcm[L] = (baseYcm[L - 1] || 5) + (layerMaxH[L - 1] || 0);
+
+    // clear existing objects and layers
+    clearAll();
+
+    // Place each object according to solver cells -> convert to cm then meters
+    const palletMinX = -PALETTE_WIDTH / 2;
+    const palletMinZ = -PALETTE_DEPTH / 2;
+    for (const p of result.placed) {
+      const it = data[p.index];
+      if (!it) continue;
+      const wCm = Number(it.width);
+      const dCm = Number(it.depth);
+      const hCm = Number(it.height);
+      // convert solver cell coords to center cm
+      const centerXcm = palletMinX + (p.x + p.w / 2) * gridCm;
+      const centerZcm = palletMinZ + (p.z + p.d / 2) * gridCm;
+      const layer = p.layer || 0;
+      const baseCm = baseYcm[layer] || (5 + (layerMaxH[0] || 0) * layer);
+      const yCm = baseCm + hCm / 2;
+
+      const w = toMeters(wCm), d = toMeters(dCm), h = toMeters(hCm);
+      const geo = new THREE.BoxGeometry(w, h, d);
+      const mat = new THREE.MeshPhongMaterial({ color: new THREE.Color(`hsl(${Math.random() * 360},70%,70%)`) });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(toMeters(centerXcm), toMeters(yCm), toMeters(centerZcm));
+      mesh.userData = { width: w, depth: d, height: h };
+      scene.add(mesh); objects.push(mesh);
+    }
+    updateObjectList();
+    alert(`Chargé ${result.placed.length} placements depuis ${solverPath}`);
+  } catch (err) {
+    alert('Erreur lors du chargement du solver: ' + err.message);
+    console.error(err);
+  }
+}
+
+// wire button if present
+const loadSolverBtn = document.getElementById('load-solver');
+if (loadSolverBtn) loadSolverBtn.addEventListener('click', () => loadSolverPlacements());
+
+// expose to console for debugging
+window.loadSolverPlacements = loadSolverPlacements;
 
 function animate() {
   requestAnimationFrame(animate);
